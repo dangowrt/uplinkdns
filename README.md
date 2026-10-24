@@ -117,6 +117,9 @@ executable. Results from `getaddrinfo()` must be freed with
   reaches nothing.
 - `gethostbyname()` and its relatives, and `sendmmsg()`, are not
   interposed.
+- A synthetic address of a family the socket's uplink has no address for,
+  IPv6 on an uplink with only a link-local IPv6 address for example, fails
+  at connect time with `ENETUNREACH` and sends no query.
 - IPv4 synthetic addresses are recycled least recently used once all of
   198.18.0.0/15 is in use; IPv6 ones are never reused.
 
@@ -133,4 +136,5 @@ Requires c-ares 1.34 or newer built with thread support.
 
 The tests run on the loopback interface only: a small DNS responder and
 echo listeners in one process, the client with the library preloaded in
-another.
+another. One check runs in a network namespace of its own, as root or in a
+user namespace, to give an uplink no addresses at all.

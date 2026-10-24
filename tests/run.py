@@ -58,8 +58,25 @@ def synthetic_ok(result):
     return len(v4) == 1 and len(v6) == 1 and in_v4 and in_v6 and named
 
 
+def isolated_run(lib):
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          'isolated.py')
+    env = dict(os.environ, LD_PRELOAD=lib,
+               UPLINKDNS_UPLINKS='lo;dns=127.0.0.53:%d' % DNS_PORT)
+    out = subprocess.run([sys.executable, '-I', script, name('test'),
+                          str(ECHO_PORT)], env=env, stdout=subprocess.PIPE,
+                         check=True)
+    return json.loads(out.stdout)
+
+
 def main():
     lib = os.path.abspath(sys.argv[1])
+    iso = isolated_run(lib)
+    check('family_v6_refused', iso['no_v6'] == 'error:ENETUNREACH',
+          iso['no_v6'])
+    check('family_v4_refused', iso['no_v4'] == 'error:ENETUNREACH',
+          iso['no_v4'])
+
     log = servers.start(CONFIG)
 
     with tempfile.NamedTemporaryFile('w', suffix='.json') as cfg:

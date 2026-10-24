@@ -569,6 +569,14 @@ static int target_resolve(int fd, const struct sockaddr *sa, bool local,
 		up = target_uplink(fd);
 
 	family = slot == SYNTH_SLOT_AAAA ? AF_INET6 : AF_INET;
+	if (up && !uplink_family_usable(up, family)) {
+		debug_log("connect %s via %s: no family %d", name, up->key,
+			  family);
+		free(name);
+		errno = ENETUNREACH;
+		return -1;
+	}
+
 	ret = up ? resolver_lookup(up, name, family, &list, NULL) :
 		   system_lookup(name, family, &list, NULL);
 	if (ret) {
