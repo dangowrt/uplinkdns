@@ -23,7 +23,8 @@ CONFIG = {
     'dns': {
         '127.0.0.53': {name('test'): ['127.0.0.10'],
                        name('multi'): ['127.0.0.10', '127.0.0.12']},
-        '127.0.0.54': {name('test'): ['127.0.0.11']},
+        '127.0.0.54': {name('test'): ['127.0.0.11', 'txt:hello-b'],
+                       '11.0.0.127.in-addr.arpa': ['ptr:' + name('host-b')]},
         '::1': {name('test'): ['127.0.0.13'],
                 name('six'): ['::1'],
                 name('closed'): ['127.0.0.13']},
@@ -38,6 +39,8 @@ UPLINKS = ' '.join([
     'lo;dns=[::1]:%d' % DNS_PORT,
     '127.0.0.4;dns=[::1]:%d' % DNS_PORT,
 ])
+
+HOST_NOT_FOUND = 1
 
 failures = []
 
@@ -110,7 +113,17 @@ def main():
            'system': 'gaierror', 'name': name('test'),
            'name_other': -errno.ENOENT}, r['explicit_api'])
     check('forked', r['forked'] == '127.0.0.10', r['forked'])
-
+    check('hostent', r['hostent'] ==
+          {'defer_synthetic': True, 'defer_connect': '127.0.0.10',
+           'defer_name': name('test'), 'defer6': True, 'python_ex': True,
+           'context': ['127.0.0.11'], 'reverse': name('host-b'),
+           'getnameinfo': name('host-b'),
+           'python_gethostbyaddr': name('host-b'), 'erange': errno.ERANGE},
+          r['hostent'])
+    check('query', r['query'] ==
+          {'res_query': 'hello-b', 'res_search': 'hello-b',
+           'res_missing': [-1, HOST_NOT_FOUND], 'res_send': [True, 'hello-b'],
+           'res_truncated': True}, r['query'])
     sources = {(q['server'], q['client']) for q in log
                if q['name'] == name('test')}
     check('query_source_a', ('127.0.0.53', '127.0.0.2') in sources, sources)

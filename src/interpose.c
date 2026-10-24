@@ -27,6 +27,16 @@ int context_get(void)
 	return context_current;
 }
 
+void context_put(int ctx)
+{
+	context_current = ctx;
+}
+
+struct uplink *context_uplink(void)
+{
+	return context_current >= 0 ? uplink_by_id(context_current) : NULL;
+}
+
 static int ptr_cmp(const void *a, const void *b)
 {
 	uintptr_t pa = (uintptr_t)a;
@@ -76,7 +86,7 @@ static bool results_unregister(struct addrinfo *head)
 	return found;
 }
 
-static void addrinfo_release(struct addrinfo *res)
+void addrinfo_release(struct addrinfo *res)
 {
 	if (!res)
 		return;
@@ -405,8 +415,7 @@ static bool name_is_localhost(const char *node)
 	return len > slen && !strncasecmp(node + len - slen, suffix, slen);
 }
 
-static bool addrinfo_bypass(int ctx, const char *node,
-			    const struct addrinfo *hints)
+bool addrinfo_bypass(int ctx, const char *node, const struct addrinfo *hints)
 {
 	int flags = hints ? hints->ai_flags : 0;
 
@@ -419,8 +428,8 @@ static bool addrinfo_bypass(int ctx, const char *node,
 	return ctx == UPLINKDNS_CTX_DEFER && !uplink_any_registered();
 }
 
-static int addrinfo_ctx(int ctx, const char *node, const char *service,
-			const struct addrinfo *hints, struct addrinfo **res)
+int addrinfo_resolve(int ctx, const char *node, const char *service,
+		     const struct addrinfo *hints, struct addrinfo **res)
 {
 	struct addrinfo numeric;
 	struct uplink *up;
@@ -524,8 +533,8 @@ static struct uplink *target_uplink(int fd)
 	struct uplink *up;
 
 	up = uplink_of_socket(fd);
-	if (!up && context_current >= 0)
-		up = uplink_by_id(context_current);
+	if (!up)
+		up = context_uplink();
 
 	return up;
 }
@@ -602,7 +611,7 @@ UPLINKDNS_EXPORT int getaddrinfo(const char *node, const char *service,
 				 struct addrinfo **res)
 {
 	real_init();
-	return addrinfo_ctx(context_current, node, service, hints, res);
+	return addrinfo_resolve(context_current, node, service, hints, res);
 }
 
 UPLINKDNS_EXPORT void freeaddrinfo(struct addrinfo *res)
@@ -611,36 +620,59 @@ UPLINKDNS_EXPORT void freeaddrinfo(struct addrinfo *res)
 	addrinfo_release(res);
 }
 
+static int nameinfo_fill(const struct sockaddr *sa, socklen_t salen,
+			 const char *name, char *host, socklen_t hostlen,
+			 char *serv, socklen_t servlen, int flags)
+{
+	int ret = 0;
+	size_t len;
+
+	if (serv && servlen)
+		ret = real.getnameinfo(sa, salen, NULL, 0, serv, servlen,
+				       flags);
+	if (ret)
+		return ret;
+
+	len = strlen(name);
+	if (len >= hostlen)
+		return EAI_OVERFLOW;
+
+	memcpy(host, name, len + 1);
+	return 0;
+}
+
 UPLINKDNS_EXPORT int getnameinfo(const struct sockaddr *sa, socklen_t salen,
 				 char *host, socklen_t hostlen, char *serv,
 				 socklen_t servlen, int flags)
 {
 	enum synth_slot slot;
-	int ret = 0;
-	char *name;
-	size_t len;
+	struct uplink *up;
+	char *name = NULL;
+	int ret;
 
 	real_init();
-	if (!host || !hostlen || flags & NI_NUMERICHOST ||
-	    !synth_is_candidate(sa, salen))
+	if (!host || !hostlen || flags & NI_NUMERICHOST)
 		return real.getnameinfo(sa, salen, host, hostlen, serv,
 					servlen, flags);
 
-	name = synth_name_get(sa, &slot, NULL);
-	if (!name)
+	if (synth_is_candidate(sa, salen))
+		name = synth_name_get(sa, &slot, NULL);
+
+	up = name ? NULL : context_uplink();
+	if (!name && !up)
 		return real.getnameinfo(sa, salen, host, hostlen, serv,
 					servlen, flags);
 
-	if (serv && servlen)
-		ret = real.getnameinfo(sa, salen, NULL, 0, serv, servlen,
-				       flags);
+	ret = name ? 0 : resolver_reverse(up, sa, salen, flags & NI_NOFQDN,
+					  &name);
+	if (ret && !(flags & NI_NAMEREQD))
+		return real.getnameinfo(sa, salen, host, hostlen, serv,
+					servlen, flags | NI_NUMERICHOST);
+	if (ret)
+		return ret;
 
-	len = strlen(name);
-	if (!ret && len >= hostlen)
-		ret = EAI_OVERFLOW;
-	if (!ret)
-		memcpy(host, name, len + 1);
-
+	ret = nameinfo_fill(sa, salen, name, host, hostlen, serv, servlen,
+			    flags);
 	free(name);
 	return ret;
 }
@@ -762,7 +794,7 @@ UPLINKDNS_EXPORT int uplinkdns_getaddrinfo(int ctx, const char *node,
 	if (ctx >= 0 && !uplink_by_id(ctx))
 		return EAI_FAIL;
 
-	return addrinfo_ctx(ctx, node, service, hints, res);
+	return addrinfo_resolve(ctx, node, service, hints, res);
 }
 
 UPLINKDNS_EXPORT void uplinkdns_freeaddrinfo(struct addrinfo *res)

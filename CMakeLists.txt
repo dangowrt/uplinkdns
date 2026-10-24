@@ -7,7 +7,9 @@ find_package(Threads REQUIRED)
 pkg_check_modules(CARES REQUIRED IMPORTED_TARGET libcares>=1.34)
 
 add_library(uplinkdns SHARED
+	src/hostent.c
 	src/interpose.c
+	src/query.c
 	src/real.c
 	src/resolver.c
 	src/synth.c

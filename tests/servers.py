@@ -4,6 +4,8 @@ import struct
 import threading
 
 QTYPE_A = 1
+QTYPE_PTR = 12
+QTYPE_TXT = 16
 QTYPE_AAAA = 28
 RCODE_NXDOMAIN = 3
 
@@ -17,21 +19,43 @@ def name_read(msg, off):
     return '.'.join(labels).lower(), off + 1
 
 
+def name_encode(name):
+    out = b''
+    for label in name.split('.'):
+        out += bytes([len(label)]) + label.encode()
+    return out + b'\0'
+
+
+def rdata_list(values, qtype):
+    out = []
+    for value in values:
+        if value.startswith('ptr:'):
+            if qtype == QTYPE_PTR:
+                out.append(name_encode(value[4:]))
+        elif value.startswith('txt:'):
+            if qtype == QTYPE_TXT:
+                text = value[4:].encode()
+                out.append(bytes([len(text)]) + text)
+        elif qtype == QTYPE_A and ':' not in value:
+            out.append(socket.inet_pton(socket.AF_INET, value))
+        elif qtype == QTYPE_AAAA and ':' in value:
+            out.append(socket.inet_pton(socket.AF_INET6, value))
+    return out
+
+
 def answer_build(msg, records):
     qid, = struct.unpack('>H', msg[:2])
     name, off = name_read(msg, 12)
     qtype, = struct.unpack('>H', msg[off:off + 2])
     question = msg[12:off + 4]
-    want = socket.AF_INET if qtype == QTYPE_A else socket.AF_INET6
     if name not in records:
         flags = 0x8180 | RCODE_NXDOMAIN
         return name, qtype, struct.pack('>HHHHHH', qid, flags, 1, 0, 0, 0) + question
-    addrs = [a for a in records[name] if (':' in a) == (want == socket.AF_INET6)]
+    rdatas = rdata_list(records[name], qtype)
     out = b''
-    for a in addrs:
-        rdata = socket.inet_pton(want, a)
+    for rdata in rdatas:
         out += struct.pack('>HHHIH', 0xc00c, qtype, 1, 60, len(rdata)) + rdata
-    head = struct.pack('>HHHHHH', qid, 0x8180, 1, len(addrs), 0, 0)
+    head = struct.pack('>HHHHHH', qid, 0x8180, 1, len(rdatas), 0, 0)
     return name, qtype, head + question + out
 
 

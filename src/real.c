@@ -28,6 +28,17 @@ static void *real_symbol(const char *name)
 	return sym;
 }
 
+void *real_optional(const char *name, const char *compat)
+{
+	void *sym;
+
+	sym = dlsym(RTLD_NEXT, name);
+	if (!sym && compat)
+		sym = dlsym(RTLD_NEXT, compat);
+
+	return sym;
+}
+
 static void fork_prepare(void)
 {
 	uplink_lock_fork_prepare();
@@ -88,6 +99,22 @@ static void real_once_init(void)
 	real.bind = real_symbol("bind");
 	real.sendto = real_symbol("sendto");
 	real.sendmsg = real_symbol("sendmsg");
+	real.gethostbyname = real_symbol("gethostbyname");
+	real.gethostbyname2 = real_symbol("gethostbyname2");
+	real.gethostbyname_r = real_symbol("gethostbyname_r");
+	real.gethostbyname2_r = real_symbol("gethostbyname2_r");
+	real.gethostbyaddr = real_symbol("gethostbyaddr");
+	real.gethostbyaddr_r = real_symbol("gethostbyaddr_r");
+	real.res_query = real_optional("res_query", "__res_query");
+	real.res_search = real_optional("res_search", "__res_search");
+	real.res_querydomain = real_optional("res_querydomain",
+					     "__res_querydomain");
+	real.res_send = real_optional("res_send", "__res_send");
+	real.res_nquery = real_optional("res_nquery", "__res_nquery");
+	real.res_nsearch = real_optional("res_nsearch", "__res_nsearch");
+	real.res_nquerydomain = real_optional("res_nquerydomain",
+					      "__res_nquerydomain");
+	real.res_nsend = real_optional("res_nsend", "__res_nsend");
 
 	env = getenv("UPLINKDNS_DEBUG");
 	debug_enabled = env && *env && *env != '0';

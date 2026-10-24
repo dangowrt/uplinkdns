@@ -1,5 +1,6 @@
 import ctypes
 import errno
+import ipaddress
 import json
 import os
 import socket
@@ -144,6 +145,113 @@ def system_unbound():
     return 'connected'
 
 
+class HostEnt(ctypes.Structure):
+    _fields_ = [('h_name', ctypes.c_char_p),
+                ('h_aliases', ctypes.POINTER(ctypes.c_char_p)),
+                ('h_addrtype', ctypes.c_int),
+                ('h_length', ctypes.c_int),
+                ('h_addr_list', ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte)))]
+
+
+def libc():
+    lib = ctypes.CDLL(None)
+    for func in ('gethostbyname', 'gethostbyname2', 'gethostbyaddr'):
+        getattr(lib, func).restype = ctypes.POINTER(HostEnt)
+    lib.__h_errno_location.restype = ctypes.POINTER(ctypes.c_int)
+    return lib
+
+
+def hostent_addrs(he):
+    family = socket.AF_INET if he.h_length == 4 else socket.AF_INET6
+    out = []
+    i = 0
+    while he.h_addr_list[i]:
+        raw = bytes(he.h_addr_list[i][:he.h_length])
+        out.append(socket.inet_ntop(family, raw))
+        i += 1
+    return out
+
+
+def in_synthetic(addr):
+    return ipaddress.ip_address(addr) in ipaddress.ip_network('198.18.0.0/15')
+
+
+def hostent_tests():
+    lib = libc()
+    out = {}
+    he = lib.gethostbyname(name('test').encode()).contents
+    addr = hostent_addrs(he)[0]
+    out['defer_synthetic'] = in_synthetic(addr)
+    out['defer_connect'] = outcome(lambda: stream_bound('127.0.0.2', addr))
+    rev = lib.gethostbyaddr(socket.inet_pton(socket.AF_INET, addr), 4,
+                            socket.AF_INET)
+    out['defer_name'] = rev.contents.h_name.decode()
+    he6 = lib.gethostbyname2(name('test').encode(), socket.AF_INET6).contents
+    out['defer6'] = hostent_addrs(he6)[0].startswith('fd')
+    out['python_ex'] = in_synthetic(socket.gethostbyname_ex(name('test'))[2][0])
+
+    lib.uplinkdns_context_set(lib.uplinkdns_uplink_add(config['uplink_b'].encode()))
+    out['context'] = hostent_addrs(lib.gethostbyname(name('test').encode()).contents)
+    rev = lib.gethostbyaddr(socket.inet_pton(socket.AF_INET, '127.0.0.11'), 4,
+                            socket.AF_INET)
+    out['reverse'] = rev.contents.h_name.decode() if rev else 'null'
+    out['getnameinfo'] = outcome(lambda: socket.getnameinfo(
+        ('127.0.0.11', port), socket.NI_NAMEREQD)[0])
+    out['python_gethostbyaddr'] = outcome(
+        lambda: socket.gethostbyaddr('127.0.0.11')[0])
+    he = HostEnt()
+    result = ctypes.POINTER(HostEnt)()
+    err = ctypes.c_int()
+    buf = ctypes.create_string_buffer(8)
+    out['erange'] = lib.gethostbyname_r(name('test').encode(), ctypes.byref(he),
+                                        buf, len(buf), ctypes.byref(result),
+                                        ctypes.byref(err))
+    lib.uplinkdns_context_set(CTX_DEFER)
+    return out
+
+
+def txt_read(msg):
+    off = 12
+    while msg[off]:
+        off += msg[off] + 1
+    off += 5
+    if struct.unpack('>H', msg[6:8])[0] == 0:
+        return None
+    off += 2 + 8
+    rdlen, = struct.unpack('>H', msg[off:off + 2])
+    rdata = msg[off + 2:off + 2 + rdlen]
+    return rdata[1:1 + rdata[0]].decode()
+
+
+def query_build(qid, qname, qtype):
+    q = struct.pack('>HHHHHH', qid, 0x0100, 1, 0, 0, 0)
+    for label in qname.split('.'):
+        q += bytes([len(label)]) + label.encode()
+    return q + b'\0' + struct.pack('>HH', qtype, 1)
+
+
+def query_tests():
+    lib = libc()
+    c_in, t_txt = 1, 16
+    buf = ctypes.create_string_buffer(512)
+    out = {}
+    lib.uplinkdns_context_set(lib.uplinkdns_uplink_add(config['uplink_b'].encode()))
+    n = lib.res_query(name('test').encode(), c_in, t_txt, buf, len(buf))
+    out['res_query'] = txt_read(buf.raw[:n]) if n > 0 else n
+    n = lib.res_search(name('test').encode(), c_in, t_txt, buf, len(buf))
+    out['res_search'] = txt_read(buf.raw[:n]) if n > 0 else n
+    n = lib.res_query(name('missing').encode(), c_in, t_txt, buf, len(buf))
+    out['res_missing'] = [n, lib.__h_errno_location().contents.value]
+    query = query_build(0x4242, name('test'), t_txt)
+    n = lib.res_send(query, len(query), buf, len(buf))
+    out['res_send'] = [struct.unpack('>H', buf.raw[:2])[0] == 0x4242,
+                       txt_read(buf.raw[:n]) if n > 0 else n]
+    out['res_truncated'] = lib.res_query(name('test').encode(), c_in, t_txt,
+                                         buf, 12) > 12
+    lib.uplinkdns_context_set(CTX_DEFER)
+    return out
+
+
 results['bound_a'] = outcome(lambda: stream_bound('127.0.0.2', name('test')))
 results['bound_b'] = outcome(lambda: stream_bound('127.0.0.3', name('test')))
 results['synthetic'] = synthetic()
@@ -161,5 +269,7 @@ results['fail_closed'] = outcome(
     lambda: stream_bound('127.0.0.4', name('closed')))
 results['explicit_api'] = explicit_api()
 results['forked'] = forked()
+results['hostent'] = hostent_tests()
+results['query'] = query_tests()
 
 print(json.dumps(results))

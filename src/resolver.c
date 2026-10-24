@@ -32,8 +32,33 @@ struct lookup {
 	struct ares_addrinfo *result;
 	pthread_mutex_t lock;
 	pthread_cond_t cond;
+	unsigned char *raw;
+	size_t ancount;
+	size_t raw_len;
+	char *node;
 	int status;
+	int rcode;
 	bool done;
+};
+
+enum lookup_kind {
+	LOOKUP_ADDRINFO,
+	LOOKUP_NAMEINFO,
+	LOOKUP_QUERY,
+	LOOKUP_SEARCH,
+	LOOKUP_SEND,
+};
+
+struct lookup_request {
+	const struct ares_addrinfo_hints *hints;
+	const ares_dns_record_t *dnsrec;
+	const struct sockaddr *sa;
+	enum lookup_kind kind;
+	const char *name;
+	socklen_t salen;
+	int dnsclass;
+	int flags;
+	int type;
 };
 
 static pthread_mutex_t watch_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -373,18 +398,60 @@ void resolver_servers_set(struct uplink *up)
 		debug_log("%s: invalid servers '%s'", up->key, up->servers);
 }
 
+static void lookup_complete(struct lookup *lk, int status)
+{
+	pthread_mutex_lock(&lk->lock);
+	lk->status = status;
+	lk->done = true;
+	pthread_cond_signal(&lk->cond);
+	pthread_mutex_unlock(&lk->lock);
+}
+
 static void lookup_done(void *arg, int status, int timeouts,
 			struct ares_addrinfo *result)
 {
 	struct lookup *lk = arg;
 
 	(void)timeouts;
-	pthread_mutex_lock(&lk->lock);
-	lk->status = status;
 	lk->result = result;
-	lk->done = true;
-	pthread_cond_signal(&lk->cond);
-	pthread_mutex_unlock(&lk->lock);
+	lookup_complete(lk, status);
+}
+
+static void nameinfo_done(void *arg, int status, int timeouts, char *node,
+			  char *service)
+{
+	struct lookup *lk = arg;
+
+	(void)timeouts;
+	(void)service;
+	if (status == ARES_SUCCESS && node) {
+		lk->node = strdup(node);
+		if (!lk->node)
+			status = ARES_ENOMEM;
+	}
+
+	lookup_complete(lk, status);
+}
+
+static void dnsrec_done(void *arg, ares_status_t status, size_t timeouts,
+			const ares_dns_record_t *dnsrec)
+{
+	struct lookup *lk = arg;
+
+	(void)timeouts;
+	if (dnsrec &&
+	    ares_dns_write(dnsrec, &lk->raw, &lk->raw_len) != ARES_SUCCESS) {
+		lk->raw = NULL;
+		lk->raw_len = 0;
+	}
+
+	if (lk->raw) {
+		lk->rcode = (int)ares_dns_record_get_rcode(dnsrec);
+		lk->ancount = ares_dns_record_rr_cnt(dnsrec,
+						     ARES_SECTION_ANSWER);
+	}
+
+	lookup_complete(lk, status);
 }
 
 static int status_to_eai(int status)
@@ -467,45 +534,96 @@ static int result_convert(const struct ares_addrinfo *res,
 	return ret;
 }
 
-static void lookup_wait(struct lookup *lk)
+static void lookup_wait(struct lookup *lk, ares_status_t started)
 {
 	pthread_mutex_lock(&lk->lock);
+	/* c-ares skips the callback only for a misuse it reports at once */
+	if (started == ARES_EFORMERR && !lk->done) {
+		lk->status = started;
+		lk->done = true;
+	}
 	while (!lk->done)
 		pthread_cond_wait(&lk->cond, &lk->lock);
 	pthread_mutex_unlock(&lk->lock);
+}
+
+static ares_status_t lookup_start(struct uplink *up, struct lookup *lk,
+				  const struct lookup_request *req)
+{
+	switch (req->kind) {
+	case LOOKUP_ADDRINFO:
+		ares_getaddrinfo(up->channel, req->name, NULL, req->hints,
+				 lookup_done, lk);
+		return ARES_SUCCESS;
+	case LOOKUP_NAMEINFO:
+		ares_getnameinfo(up->channel, req->sa, req->salen, req->flags,
+				 nameinfo_done, lk);
+		return ARES_SUCCESS;
+	case LOOKUP_QUERY:
+		return ares_query_dnsrec(up->channel, req->name,
+					 (ares_dns_class_t)req->dnsclass,
+					 (ares_dns_rec_type_t)req->type,
+					 dnsrec_done, lk, NULL);
+	case LOOKUP_SEARCH:
+		return ares_search_dnsrec(up->channel, req->dnsrec, dnsrec_done,
+					  lk);
+	case LOOKUP_SEND:
+		return ares_send_dnsrec(up->channel, req->dnsrec, dnsrec_done,
+					lk, NULL);
+	}
+
+	return ARES_EFORMERR;
+}
+
+static int lookup_run(struct uplink *up, struct lookup *lk,
+		      const struct lookup_request *req)
+{
+	ares_status_t started;
+	int cancel_state;
+	int ret;
+
+	memset(lk, 0, sizeof(*lk));
+	ret = uplink_channel_ensure(up);
+	if (ret)
+		return ret;
+
+	pthread_mutex_init(&lk->lock, NULL);
+	pthread_cond_init(&lk->cond, NULL);
+
+	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &cancel_state);
+	started = lookup_start(up, lk, req);
+	resolver_wake();
+	lookup_wait(lk, started);
+	pthread_setcancelstate(cancel_state, NULL);
+
+	pthread_cond_destroy(&lk->cond);
+	pthread_mutex_destroy(&lk->lock);
+	return 0;
 }
 
 int resolver_lookup(struct uplink *up, const char *name, int family,
 		    struct addr_list *list, char **canon)
 {
 	struct ares_addrinfo_hints hints;
-	int cancel_state;
+	struct lookup_request req;
 	struct lookup lk;
 	int ret;
 
 	memset(list, 0, sizeof(*list));
-	ret = uplink_channel_ensure(up);
-	if (ret) {
-		errno = -ret;
-		return EAI_SYSTEM;
-	}
-
-	memset(&lk, 0, sizeof(lk));
-	pthread_mutex_init(&lk.lock, NULL);
-	pthread_cond_init(&lk.cond, NULL);
-
 	memset(&hints, 0, sizeof(hints));
 	hints.ai_family = family;
 	hints.ai_flags = canon ? ARES_AI_CANONNAME : 0;
 
-	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &cancel_state);
-	ares_getaddrinfo(up->channel, name, NULL, &hints, lookup_done, &lk);
-	resolver_wake();
-	lookup_wait(&lk);
-	pthread_setcancelstate(cancel_state, NULL);
+	memset(&req, 0, sizeof(req));
+	req.kind = LOOKUP_ADDRINFO;
+	req.name = name;
+	req.hints = &hints;
 
-	pthread_cond_destroy(&lk.cond);
-	pthread_mutex_destroy(&lk.lock);
+	ret = lookup_run(up, &lk, &req);
+	if (ret) {
+		errno = -ret;
+		return EAI_SYSTEM;
+	}
 
 	ret = status_to_eai(lk.status);
 	if (!ret)
@@ -516,6 +634,120 @@ int resolver_lookup(struct uplink *up, const char *name, int family,
 	debug_log("lookup %s family %d via %s: %s", name, family, up->key,
 		  ret ? ares_strerror(lk.status) : "ok");
 	return ret;
+}
+
+int resolver_reverse(struct uplink *up, const struct sockaddr *sa,
+		     socklen_t salen, bool nofqdn, char **name)
+{
+	struct lookup_request req;
+	struct lookup lk;
+	int ret;
+
+	memset(&req, 0, sizeof(req));
+	req.kind = LOOKUP_NAMEINFO;
+	req.sa = sa;
+	req.salen = salen;
+	req.flags = ARES_NI_LOOKUPHOST | ARES_NI_NAMEREQD;
+	if (nofqdn)
+		req.flags |= ARES_NI_NOFQDN;
+
+	ret = lookup_run(up, &lk, &req);
+	if (ret) {
+		errno = -ret;
+		return EAI_SYSTEM;
+	}
+
+	ret = status_to_eai(lk.status);
+	debug_log("reverse via %s: %s", up->key, ares_strerror(lk.status));
+	if (ret) {
+		free(lk.node);
+		return ret;
+	}
+
+	*name = lk.node;
+	return 0;
+}
+
+static ares_status_t raw_record_get(const struct raw_request *raw,
+				    ares_dns_record_t **dnsrec)
+{
+	ares_status_t status;
+
+	*dnsrec = NULL;
+	if (raw->kind == RAW_QUERY)
+		return ARES_SUCCESS;
+
+	if (raw->kind == RAW_SEND)
+		return ares_dns_parse(raw->msg, raw->msg_len, 0, dnsrec);
+
+	status = ares_dns_record_create(dnsrec, 0, ARES_FLAG_RD,
+					ARES_OPCODE_QUERY, ARES_RCODE_NOERROR);
+	if (status != ARES_SUCCESS)
+		return status;
+
+	status = ares_dns_record_query_add(*dnsrec, raw->name,
+					   (ares_dns_rec_type_t)raw->type,
+					   (ares_dns_class_t)raw->dnsclass);
+	if (status == ARES_SUCCESS)
+		return status;
+
+	ares_dns_record_destroy(*dnsrec);
+	*dnsrec = NULL;
+	return status;
+}
+
+static enum lookup_kind raw_kind_lookup(enum raw_kind kind)
+{
+	switch (kind) {
+	case RAW_QUERY:
+		return LOOKUP_QUERY;
+	case RAW_SEARCH:
+		return LOOKUP_SEARCH;
+	case RAW_SEND:
+		break;
+	}
+
+	return LOOKUP_SEND;
+}
+
+int resolver_raw(struct uplink *up, const struct raw_request *raw,
+		 struct raw_answer *ans)
+{
+	ares_dns_record_t *dnsrec;
+	struct lookup_request req;
+	ares_status_t status;
+	struct lookup lk;
+	int ret;
+
+	memset(ans, 0, sizeof(*ans));
+	status = raw_record_get(raw, &dnsrec);
+	if (status != ARES_SUCCESS)
+		return status;
+
+	memset(&req, 0, sizeof(req));
+	req.kind = raw_kind_lookup(raw->kind);
+	req.name = raw->name;
+	req.dnsclass = raw->dnsclass;
+	req.type = raw->type;
+	req.dnsrec = dnsrec;
+
+	ret = lookup_run(up, &lk, &req);
+	if (dnsrec)
+		ares_dns_record_destroy(dnsrec);
+	if (ret)
+		return ARES_ENOSERVER;
+
+	/* the reply carries the query id c-ares chose, the caller matches its own */
+	if (lk.raw && raw->kind == RAW_SEND && lk.raw_len >= 2)
+		memcpy(lk.raw, raw->msg, 2);
+
+	debug_log("query %s type %d via %s: %s", raw->name ? raw->name : "-",
+		  raw->type, up->key, ares_strerror(lk.status));
+	ans->buf = lk.raw;
+	ans->len = lk.raw_len;
+	ans->rcode = lk.rcode;
+	ans->ancount = lk.ancount;
+	return lk.status;
 }
 
 int system_lookup(const char *name, int family, struct addr_list *list,

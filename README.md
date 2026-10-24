@@ -31,6 +31,10 @@ The connection then goes to the real address, with the caller's port. A
 name with several addresses rotates through them on successive connects.
 `getnameinfo()` maps a synthetic address back to its name.
 
+The older netdb calls work the same way: `gethostbyname()`,
+`gethostbyname2()` and their `_r` forms hand out synthetic addresses, and
+`gethostbyaddr()` maps one back to its name.
+
 Lookups for an uplink run on c-ares, from a socket bound to the uplink's
 device or source address. If that binding fails, the query is not sent:
 lookups for a pinned socket never fall back to another uplink. The c-ares
@@ -91,6 +95,12 @@ The context is per thread and decides what `getaddrinfo()` does in it:
 `uplinkdns_context_set()` returns the previous context, or `-EINVAL` for
 an unknown id.
 
+An uplink context also covers the lookups that have no socket to go by:
+reverse lookups through `getnameinfo()` and `gethostbyaddr()`, and raw
+queries through `res_query()`, `res_search()`, `res_querydomain()` and
+`res_send()`, with glibc's `res_n*()` forms, run through that uplink. In
+the other contexts they go to libc.
+
 `uplinkdns_name_get()` writes the hostname a synthetic address stands for
 and returns 0, or `-ENOENT` for any other address. It never sends a query,
 so it suits code that decides by name whether a destination is local.
@@ -115,8 +125,7 @@ executable. Results from `getaddrinfo()` must be freed with
 - A synthetic address is only meaningful inside the process. Passed to
   another process, or used by code that makes its own system calls, it
   reaches nothing.
-- `gethostbyname()` and its relatives, and `sendmmsg()`, are not
-  interposed.
+- `sendmmsg()` is not interposed.
 - A synthetic address of a family the socket's uplink has no address for,
   IPv6 on an uplink with only a link-local IPv6 address for example, fails
   at connect time with `ENETUNREACH` and sends no query.

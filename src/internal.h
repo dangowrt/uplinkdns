@@ -37,6 +37,37 @@ struct real_funcs {
 	ssize_t (*sendto)(int fd, const void *buf, size_t len, int flags,
 			  const struct sockaddr *sa, socklen_t salen);
 	ssize_t (*sendmsg)(int fd, const struct msghdr *msg, int flags);
+	struct hostent *(*gethostbyname)(const char *name);
+	struct hostent *(*gethostbyname2)(const char *name, int af);
+	int (*gethostbyname_r)(const char *name, struct hostent *he, char *buf,
+			       size_t buflen, struct hostent **result,
+			       int *err);
+	int (*gethostbyname2_r)(const char *name, int af, struct hostent *he,
+				char *buf, size_t buflen,
+				struct hostent **result, int *err);
+	struct hostent *(*gethostbyaddr)(const void *addr, socklen_t len,
+					 int type);
+	int (*gethostbyaddr_r)(const void *addr, socklen_t len, int type,
+			       struct hostent *he, char *buf, size_t buflen,
+			       struct hostent **result, int *err);
+	int (*res_query)(const char *name, int dnsclass, int type,
+			 unsigned char *answer, int anslen);
+	int (*res_search)(const char *name, int dnsclass, int type,
+			  unsigned char *answer, int anslen);
+	int (*res_querydomain)(const char *name, const char *domain,
+			       int dnsclass, int type, unsigned char *answer,
+			       int anslen);
+	int (*res_send)(const unsigned char *msg, int msglen,
+			unsigned char *answer, int anslen);
+	int (*res_nquery)(void *statp, const char *name, int dnsclass, int type,
+			  unsigned char *answer, int anslen);
+	int (*res_nsearch)(void *statp, const char *name, int dnsclass,
+			   int type, unsigned char *answer, int anslen);
+	int (*res_nquerydomain)(void *statp, const char *name,
+				const char *domain, int dnsclass, int type,
+				unsigned char *answer, int anslen);
+	int (*res_nsend)(void *statp, const unsigned char *msg, int msglen,
+			 unsigned char *answer, int anslen);
 };
 
 struct addr_list {
@@ -48,10 +79,17 @@ extern struct real_funcs real;
 extern bool debug_enabled;
 
 void real_init(void);
+void *real_optional(const char *name, const char *compat);
 void debug_log(const char *fmt, ...)
 	__attribute__((format(printf, 1, 2)));
 
 int context_get(void);
+void context_put(int ctx);
+bool addrinfo_bypass(int ctx, const char *node, const struct addrinfo *hints);
+int addrinfo_resolve(int ctx, const char *node, const char *service,
+		     const struct addrinfo *hints, struct addrinfo **res);
+void addrinfo_release(struct addrinfo *res);
+struct uplink *context_uplink(void);
 void results_fork_prepare(void);
 void results_fork_parent(void);
 void results_fork_child(void);
@@ -70,8 +108,34 @@ void uplink_lock_fork_prepare(void);
 void uplink_lock_fork_parent(void);
 void uplink_lock_fork_child(void);
 
+enum raw_kind {
+	RAW_QUERY,
+	RAW_SEARCH,
+	RAW_SEND,
+};
+
+struct raw_request {
+	const unsigned char *msg;
+	enum raw_kind kind;
+	const char *name;
+	size_t msg_len;
+	int dnsclass;
+	int type;
+};
+
+struct raw_answer {
+	unsigned char *buf;
+	size_t ancount;
+	size_t len;
+	int rcode;
+};
+
 int resolver_lookup(struct uplink *up, const char *name, int family,
 		    struct addr_list *list, char **canon);
+int resolver_reverse(struct uplink *up, const struct sockaddr *sa,
+		     socklen_t salen, bool nofqdn, char **name);
+int resolver_raw(struct uplink *up, const struct raw_request *raw,
+		 struct raw_answer *ans);
 int resolver_channel_create(struct uplink *up);
 void resolver_servers_set(struct uplink *up);
 void resolver_fork_prepare(void);
