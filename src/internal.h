@@ -11,6 +11,14 @@
 
 #define UPLINKDNS_EXPORT __attribute__((visibility("default")))
 
+#ifdef __GLIBC__
+#define SENDMMSG_FLAGS int
+#else
+#define SENDMMSG_FLAGS unsigned int
+#endif
+
+struct mmsghdr;
+
 struct uplink {
 	char ifname[IF_NAMESIZE];
 	struct in6_addr addr6;
@@ -37,6 +45,8 @@ struct real_funcs {
 	ssize_t (*sendto)(int fd, const void *buf, size_t len, int flags,
 			  const struct sockaddr *sa, socklen_t salen);
 	ssize_t (*sendmsg)(int fd, const struct msghdr *msg, int flags);
+	int (*sendmmsg)(int fd, struct mmsghdr *msgs, unsigned int vlen,
+			SENDMMSG_FLAGS flags);
 	struct hostent *(*gethostbyname)(const char *name);
 	struct hostent *(*gethostbyname2)(const char *name, int af);
 	int (*gethostbyname_r)(const char *name, struct hostent *he, char *buf,

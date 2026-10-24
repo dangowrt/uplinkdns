@@ -99,6 +99,7 @@ static void real_once_init(void)
 	real.bind = real_symbol("bind");
 	real.sendto = real_symbol("sendto");
 	real.sendmsg = real_symbol("sendmsg");
+	real.sendmmsg = real_symbol("sendmmsg");
 	real.gethostbyname = real_symbol("gethostbyname");
 	real.gethostbyname2 = real_symbol("gethostbyname2");
 	real.gethostbyname_r = real_symbol("gethostbyname_r");

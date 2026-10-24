@@ -1,4 +1,4 @@
-#define _DEFAULT_SOURCE
+#define _GNU_SOURCE
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -759,6 +759,80 @@ UPLINKDNS_EXPORT ssize_t sendmsg(int fd, const struct msghdr *msg, int flags)
 	copy.msg_name = &target;
 	copy.msg_namelen = len;
 	return real.sendmsg(fd, &copy, flags);
+}
+
+static unsigned int mmsg_resolve(int fd, const struct mmsghdr *msgs,
+				 unsigned int vlen, struct mmsghdr *copy,
+				 struct sockaddr_storage *targets)
+{
+	const struct msghdr *hdr;
+	socklen_t len;
+	unsigned int i;
+	int ret;
+
+	for (i = 0; i < vlen; i++) {
+		copy[i] = msgs[i];
+		hdr = &msgs[i].msg_hdr;
+		if (!synth_is_candidate(hdr->msg_name, hdr->msg_namelen))
+			continue;
+
+		ret = target_resolve(fd, hdr->msg_name, false, &targets[i],
+				     &len);
+		if (ret < 0)
+			break;
+		if (!ret)
+			continue;
+
+		copy[i].msg_hdr.msg_name = &targets[i];
+		copy[i].msg_hdr.msg_namelen = len;
+	}
+
+	return i;
+}
+
+static bool mmsg_synthetic(const struct mmsghdr *msgs, unsigned int vlen)
+{
+	unsigned int i;
+
+	for (i = 0; i < vlen; i++) {
+		if (synth_is_candidate(msgs[i].msg_hdr.msg_name,
+				       msgs[i].msg_hdr.msg_namelen))
+			return true;
+	}
+
+	return false;
+}
+
+UPLINKDNS_EXPORT int sendmmsg(int fd, struct mmsghdr *msgs, unsigned int vlen,
+			      SENDMMSG_FLAGS flags)
+{
+	struct sockaddr_storage *targets;
+	struct mmsghdr *copy;
+	unsigned int count;
+	unsigned int i;
+	int ret;
+
+	real_init();
+	if (!msgs || !mmsg_synthetic(msgs, vlen))
+		return real.sendmmsg(fd, msgs, vlen, flags);
+
+	copy = calloc(vlen, sizeof(*copy));
+	targets = calloc(vlen, sizeof(*targets));
+	if (!copy || !targets) {
+		free(targets);
+		free(copy);
+		errno = ENOMEM;
+		return -1;
+	}
+
+	count = mmsg_resolve(fd, msgs, vlen, copy, targets);
+	ret = count ? real.sendmmsg(fd, copy, count, flags) : -1;
+	for (i = 0; ret > 0 && i < (unsigned int)ret; i++)
+		msgs[i].msg_len = copy[i].msg_len;
+
+	free(targets);
+	free(copy);
+	return ret;
 }
 
 UPLINKDNS_EXPORT int uplinkdns_uplink_add(const char *spec)

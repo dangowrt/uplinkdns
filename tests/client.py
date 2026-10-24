@@ -54,6 +54,45 @@ def datagram_bound(src, host):
     return reply
 
 
+class IoVec(ctypes.Structure):
+    _fields_ = [('base', ctypes.c_void_p), ('len', ctypes.c_size_t)]
+
+
+class MsgHdr(ctypes.Structure):
+    _fields_ = [('name', ctypes.c_void_p), ('namelen', ctypes.c_uint32),
+                ('iov', ctypes.POINTER(IoVec)), ('iovlen', ctypes.c_size_t),
+                ('control', ctypes.c_void_p), ('controllen', ctypes.c_size_t),
+                ('flags', ctypes.c_int)]
+
+
+class MMsgHdr(ctypes.Structure):
+    _fields_ = [('hdr', MsgHdr), ('len', ctypes.c_uint)]
+
+
+def datagram_batch(src, host):
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.bind((src, 0))
+    addr = socket.getaddrinfo(host, port, socket.AF_INET)[0][4][0]
+    sin = struct.pack('=H', socket.AF_INET) + struct.pack('>H', port)
+    sin += socket.inet_pton(socket.AF_INET, addr) + bytes(8)
+    name_buf = ctypes.create_string_buffer(sin, len(sin))
+    payload = ctypes.create_string_buffer(b'x', 1)
+    iov = IoVec(ctypes.cast(payload, ctypes.c_void_p), 1)
+    msgs = (MMsgHdr * 2)()
+    for m in msgs:
+        m.hdr.name = ctypes.cast(name_buf, ctypes.c_void_p)
+        m.hdr.namelen = len(sin)
+        m.hdr.iov = ctypes.pointer(iov)
+        m.hdr.iovlen = 1
+    sent = ctypes.CDLL(None, use_errno=True).sendmmsg(s.fileno(), msgs, 2, 0)
+    if sent < 0:
+        s.close()
+        raise OSError(ctypes.get_errno(), 'sendmmsg')
+    replies = [s.recvfrom(64)[0].decode() for _ in range(sent)]
+    s.close()
+    return replies
+
+
 def synthetic():
     infos = socket.getaddrinfo(name('test'), port, 0, socket.SOCK_STREAM)
     addrs = [i[4][0] for i in infos]
@@ -308,6 +347,8 @@ results['rotation'] = sorted(
     {outcome(lambda: stream_bound('127.0.0.2', name('multi')))
      for _ in range(4)})
 results['udp'] = outcome(lambda: datagram_bound('127.0.0.2', name('test')))
+results['udp_batch'] = outcome(
+    lambda: datagram_batch('127.0.0.2', name('test')))
 results['device_v6'] = outcome(
     lambda: stream_device('lo', socket.AF_INET6, (name('six'), port)))
 results['mapped_slots'] = mapped_slots()

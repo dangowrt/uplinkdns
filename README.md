@@ -19,8 +19,8 @@ GLib/libsoup, CPython, ...) without changes to them, on glibc and on musl.
 198.18.0.0/15 (RFC 2544) for IPv4 and two from a random per-process ULA
 /48 (RFC 4193) for IPv6, one standing for the name's AAAA records and one
 for its A records as IPv4-mapped addresses. The interposed `connect()`,
-`sendto()` and `sendmsg()` recognise a synthetic destination, look at the
-socket's binding and resolve the name there:
+`sendto()`, `sendmsg()` and `sendmmsg()` recognise a synthetic
+destination, look at the socket's binding and resolve the name there:
 
 - bound to a device: through that device's uplink;
 - bound to a source address: through the uplink whose address or prefix
@@ -131,7 +131,8 @@ executable. Results from `getaddrinfo()` must be freed with
 - A synthetic address is only meaningful inside the process. Passed to
   another process, or used by code that makes its own system calls, it
   reaches nothing.
-- `sendmmsg()` is not interposed.
+- On 32-bit glibc, a program built with a 64-bit `time_t` sends through
+  `__sendmsg64()` and `__sendmmsg64()`, which are not interposed.
 - A synthetic address of a family the socket's uplink has no address for,
   IPv6 on an uplink with only a link-local IPv6 address for example, fails
   at connect time with `ENETUNREACH` and sends no query.

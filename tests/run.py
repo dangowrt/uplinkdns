@@ -107,6 +107,8 @@ def main():
     check('rotation', r['rotation'] == ['127.0.0.10', '127.0.0.12'],
           r['rotation'])
     check('udp', r['udp'] == '127.0.0.10', r['udp'])
+    check('udp_batch', r['udp_batch'] == ['127.0.0.10', '127.0.0.10'],
+          r['udp_batch'])
     check('device_v6', r['device_v6'] == '::1', r['device_v6'])
     check('mapped_slots',
           r['mapped_slots'] == ['error:EHOSTUNREACH', '127.0.0.13'],
