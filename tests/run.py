@@ -39,6 +39,7 @@ UPLINKS = ' '.join([
     CONFIG['uplink_b'],
     'lo;dns=[::1]:%d' % DNS_PORT,
     '127.0.0.4;dns=[::1]:%d' % DNS_PORT,
+    '127.0.1.0/24;dns=127.0.0.54:%d' % DNS_PORT,
 ])
 
 HOST_NOT_FOUND = 1
@@ -118,7 +119,8 @@ def main():
     check('explicit_api', r['explicit_api'] ==
           {'api': '127.0.0.11', 'context': '127.0.0.11',
            'system': 'gaierror', 'name': name('test'),
-           'name_other': -errno.ENOENT}, r['explicit_api'])
+           'name_other': -errno.ENOENT, 'covering': True},
+          r['explicit_api'])
     check('forked', r['forked'] == '127.0.0.10', r['forked'])
     check('hostent', r['hostent'] ==
           {'defer_synthetic': True, 'defer_connect': '127.0.0.10',

@@ -83,7 +83,9 @@ int uplinkdns_name_get(const struct sockaddr *sa, socklen_t salen,
 ```
 
 `uplinkdns_uplink_add()` returns the uplink's id, or a negative errno.
-Adding the same key again returns the same id and updates its servers.
+Adding the same key again returns the same id and updates its servers. A
+bare address without a key of its own returns the most specific registered
+uplink whose prefix contains it, as a socket bound to that address gets.
 
 The context is per thread and decides what `getaddrinfo()` does in it:
 

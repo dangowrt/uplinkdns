@@ -156,8 +156,10 @@ def explicit_api():
     real = struct.pack('=H', socket.AF_INET) + struct.pack('>H', port)
     real += socket.inet_pton(socket.AF_INET, '127.0.0.1') + bytes(8)
     other = lib.uplinkdns_name_get(real, len(real), buf, len(buf))
+    covering = (lib.uplinkdns_uplink_add(b'127.0.1.5') ==
+                lib.uplinkdns_uplink_add(b'127.0.1.0/24'))
     return {'api': first, 'context': in_context, 'system': system,
-            'name': found, 'name_other': other}
+            'name': found, 'name_other': other, 'covering': covering}
 
 
 def forked():

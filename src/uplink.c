@@ -202,6 +202,43 @@ static struct uplink *uplink_insert_locked(const struct uplink *parsed,
 	return up;
 }
 
+static struct uplink *uplink_covering_locked(const struct uplink *parsed)
+{
+	struct sockaddr_storage ss;
+	struct uplink *best = NULL;
+	struct uplink *up;
+	size_t i;
+
+	memset(&ss, 0, sizeof(ss));
+	ss.ss_family = (sa_family_t)parsed->family;
+	if (parsed->family == AF_INET)
+		memcpy(&((struct sockaddr_in *)&ss)->sin_addr, &parsed->addr4,
+		       sizeof(parsed->addr4));
+	else
+		memcpy(&((struct sockaddr_in6 *)&ss)->sin6_addr, &parsed->addr6,
+		       sizeof(parsed->addr6));
+
+	for (i = 0; i < uplink_count; i++) {
+		up = uplinks[i];
+		if (!up->registered || !uplink_contains(up, &ss))
+			continue;
+
+		if (!best || up->prefix_len > best->prefix_len)
+			best = up;
+	}
+
+	return best;
+}
+
+static bool uplink_bare_address(const struct uplink *parsed,
+				const char *servers)
+{
+	if (servers || parsed->family == AF_UNSPEC)
+		return false;
+
+	return parsed->prefix_len == (parsed->family == AF_INET ? 32u : 128u);
+}
+
 static int uplink_add(const struct uplink *parsed, const char *key,
 		      const char *servers, bool registered)
 {
@@ -211,6 +248,8 @@ static int uplink_add(const struct uplink *parsed, const char *key,
 	pthread_mutex_lock(&uplink_lock);
 
 	up = uplink_find_locked(key);
+	if (!up && uplink_bare_address(parsed, servers))
+		up = uplink_covering_locked(parsed);
 	if (!up) {
 		up = uplink_insert_locked(parsed, key, servers, registered);
 		ret = up ? up->id : -ENOMEM;
