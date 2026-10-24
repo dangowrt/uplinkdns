@@ -115,7 +115,8 @@ so it suits code that decides by name whether a destination is local.
 
 The library has to come before libc in symbol lookup order: either
 `LD_PRELOAD=libuplinkdns.so.0`, or linked as a dependency of the
-executable. Results from `getaddrinfo()` must be freed with
+executable. `UPLINKDNS_SONAME` in the header names the library for a
+program that preloads it into processes it starts. Results from `getaddrinfo()` must be freed with
 `freeaddrinfo()` of the same process image, which is the interposed one.
 
 `UPLINKDNS_DEBUG=1` prints each decision to stderr.

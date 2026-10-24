@@ -21,14 +21,15 @@ set_target_properties(uplinkdns PROPERTIES
 	C_VISIBILITY_PRESET hidden
 	VERSION ${PROJECT_VERSION}
 	SOVERSION ${PROJECT_VERSION_MAJOR}
-	PUBLIC_HEADER include/uplinkdns.h)
+	PUBLIC_HEADER ${CMAKE_CURRENT_BINARY_DIR}/include/uplinkdns.h)
 target_compile_options(uplinkdns PRIVATE -Wall -Wextra)
 target_include_directories(uplinkdns PUBLIC
-	$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+	$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
 	$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_link_libraries(uplinkdns PRIVATE PkgConfig::CARES Threads::Threads
 	${CMAKE_DL_LIBS})
 
+configure_file(include/uplinkdns.h.in include/uplinkdns.h @ONLY)
 configure_file(uplinkdns.pc.in uplinkdns.pc @ONLY)
 
 install(TARGETS uplinkdns

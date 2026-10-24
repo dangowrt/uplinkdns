@@ -7,6 +7,8 @@
 extern "C" {
 #endif
 
+#define UPLINKDNS_SONAME	"libuplinkdns.so.@PROJECT_VERSION_MAJOR@"
+
 /* Resolve hostnames at connect() time through the socket's uplink. */
 #define UPLINKDNS_CTX_DEFER	(-1)
 /* Resolve hostnames through the system resolver. */
