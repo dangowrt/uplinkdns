@@ -101,6 +101,12 @@ queries through `res_query()`, `res_search()`, `res_querydomain()` and
 `res_send()`, with glibc's `res_n*()` forms, run through that uplink. In
 the other contexts they go to libc.
 
+On glibc, `getaddrinfo_a()` runs its requests on threads that take over
+the caller's context, and `gai_error()`, `gai_suspend()` and
+`gai_cancel()` work on those requests. `rcmd()`, `rexec()` and the
+`getnetby*()` lookups resolve inside glibc, out of the library's reach, so
+they fail while the thread's context names an uplink.
+
 `uplinkdns_name_get()` writes the hostname a synthetic address stands for
 and returns 0, or `-ENOENT` for any other address. It never sends a query,
 so it suits code that decides by name whether a destination is local.

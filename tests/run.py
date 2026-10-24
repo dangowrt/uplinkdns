@@ -1,3 +1,4 @@
+import ctypes
 import errno
 import ipaddress
 import json
@@ -43,6 +44,10 @@ UPLINKS = ' '.join([
 HOST_NOT_FOUND = 1
 
 failures = []
+
+
+def glibc():
+    return hasattr(ctypes.CDLL(None), 'gnu_get_libc_version')
 
 
 def check(label, ok, detail):
@@ -124,6 +129,14 @@ def main():
           {'res_query': 'hello-b', 'res_search': 'hello-b',
            'res_missing': [-1, HOST_NOT_FOUND], 'res_send': [True, 'hello-b'],
            'res_truncated': True}, r['query'])
+    if glibc():
+        check('async', r['async'] ==
+              {'defer': True, 'wait_ret': 0, 'wait': '127.0.0.11',
+               'nowait_ret': 0, 'suspend': 0, 'error': 0,
+               'nowait': '127.0.0.11'}, r['async'])
+    else:
+        check('async', r['async'] == 'not glibc', r['async'])
+
     sources = {(q['server'], q['client']) for q in log
                if q['name'] == name('test')}
     check('query_source_a', ('127.0.0.53', '127.0.0.2') in sources, sources)

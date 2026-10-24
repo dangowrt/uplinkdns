@@ -153,6 +153,15 @@ class HostEnt(ctypes.Structure):
                 ('h_addr_list', ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte)))]
 
 
+class GaiCb(ctypes.Structure):
+    _fields_ = [('ar_name', ctypes.c_char_p),
+                ('ar_service', ctypes.c_char_p),
+                ('ar_request', ctypes.c_void_p),
+                ('ar_result', ctypes.POINTER(AddrInfo)),
+                ('ret', ctypes.c_int),
+                ('reserved', ctypes.c_int * 5)]
+
+
 def libc():
     lib = ctypes.CDLL(None)
     for func in ('gethostbyname', 'gethostbyname2', 'gethostbyaddr'):
@@ -252,6 +261,43 @@ def query_tests():
     return out
 
 
+def gai_first(req):
+    raw = ctypes.string_at(req.ar_result.contents.ai_addr, 8)
+    return socket.inet_ntop(socket.AF_INET, raw[4:8])
+
+
+def async_tests():
+    lib = libc()
+    gai_wait, gai_nowait = 0, 1
+    if not hasattr(lib, 'gnu_get_libc_version'):
+        return 'not glibc'
+
+    hints = AddrInfo()
+    hints.ai_family = socket.AF_INET
+    hints.ai_socktype = socket.SOCK_STREAM
+    out = {}
+
+    req = GaiCb(name('test').encode(), None, ctypes.addressof(hints))
+    reqs = (ctypes.POINTER(GaiCb) * 1)(ctypes.pointer(req))
+    lib.getaddrinfo_a(gai_wait, reqs, 1, None)
+    out['defer'] = in_synthetic(gai_first(req))
+
+    lib.uplinkdns_context_set(lib.uplinkdns_uplink_add(config['uplink_b'].encode()))
+    req = GaiCb(name('test').encode(), None, ctypes.addressof(hints))
+    reqs = (ctypes.POINTER(GaiCb) * 1)(ctypes.pointer(req))
+    out['wait_ret'] = lib.getaddrinfo_a(gai_wait, reqs, 1, None)
+    out['wait'] = gai_first(req)
+
+    req = GaiCb(name('test').encode(), None, ctypes.addressof(hints))
+    reqs = (ctypes.POINTER(GaiCb) * 1)(ctypes.pointer(req))
+    out['nowait_ret'] = lib.getaddrinfo_a(gai_nowait, reqs, 1, None)
+    out['suspend'] = lib.gai_suspend(reqs, 1, None)
+    out['error'] = lib.gai_error(ctypes.byref(req))
+    out['nowait'] = gai_first(req)
+    lib.uplinkdns_context_set(CTX_DEFER)
+    return out
+
+
 results['bound_a'] = outcome(lambda: stream_bound('127.0.0.2', name('test')))
 results['bound_b'] = outcome(lambda: stream_bound('127.0.0.3', name('test')))
 results['synthetic'] = synthetic()
@@ -271,5 +317,6 @@ results['explicit_api'] = explicit_api()
 results['forked'] = forked()
 results['hostent'] = hostent_tests()
 results['query'] = query_tests()
+results['async'] = async_tests()
 
 print(json.dumps(results))
