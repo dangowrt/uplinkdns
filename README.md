@@ -134,6 +134,12 @@ program that preloads it into processes it starts. Results from `getaddrinfo()` 
 - A synthetic address is only meaningful inside the process. Passed to
   another process, or used by code that makes its own system calls, it
   reaches nothing.
+- Only lookups made through the C library are seen. Code with a resolver
+  of its own, such as a library built with its own copy of c-ares, a
+  DNS-over-HTTPS client, a Python DNS module or a statically linked
+  program, sends its queries itself, to whatever servers it reads and over
+  whatever route its sockets take. Such code has to bind its DNS sockets
+  to the uplink, or be given the uplink's servers, itself.
 - On 32-bit glibc, a program built with a 64-bit `time_t` sends through
   `__sendmsg64()` and `__sendmmsg64()`, which are not interposed.
 - A synthetic address of a family the socket's uplink has no address for,
