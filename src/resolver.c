@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+
 #define _DEFAULT_SOURCE
 
 #include <errno.h>

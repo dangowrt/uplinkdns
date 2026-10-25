@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+
 #ifndef UPLINKDNS_INTERNAL_H
 #define UPLINKDNS_INTERNAL_H
 

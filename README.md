@@ -157,3 +157,10 @@ The tests run on the loopback interface only: a small DNS responder and
 echo listeners in one process, the client with the library preloaded in
 another. One check runs in a network namespace of its own, as root or in a
 user namespace, to give an uplink no addresses at all.
+
+## Licence
+
+Copyright (C) 2026 Daniel Golle <daniel@makrotopia.org>
+
+uplinkdns is free software under the GNU General Public License, version 2
+or (at your option) any later version. See `LICENSE`.
